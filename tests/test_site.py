@@ -7,10 +7,12 @@ import json
 import re
 from pathlib import Path
 
-from conftest import valid_page, write_catalog
+from conftest import valid_catalog, valid_page, write_catalog
 
+from repowiki.catalog import flatten
 from repowiki.cli import main
 from repowiki.paths import WikiPaths
+from repowiki.state import TaskStore
 
 
 def run(*argv):
@@ -50,9 +52,67 @@ def extract_payload(html: str) -> dict:
 
 # --- gating ---
 
-def test_site_requires_finalize(repo, capsys):
+def test_site_without_pages_fails_cleanly(repo, paths, capsys):
     assert run("site", str(repo)) == 1
-    assert "finalize" in capsys.readouterr().err
+    assert "未找到任何已生成的 wiki 页面" in capsys.readouterr().err
+    assert not paths.metadata_file.exists()
+
+
+def test_site_draft_mode_renders_partial_progress(repo, paths, capsys):
+    write_catalog(paths)
+    write_page(paths, "zh/content/项目概述/核心概念.md")  # 1 of 2 pages done
+    assert run("site", str(repo)) == 0
+    meta = json.loads(paths.metadata_file.read_text(encoding="utf-8"))
+    assert meta["_draft"] is True
+    assert "草稿模式" in capsys.readouterr().out
+    payload = extract_payload(paths.site_file.read_text(encoding="utf-8"))
+    assert [p["id"] for p in payload["pages"]] == ["c0101"]
+
+
+def test_site_draft_mode_json_summary(repo, paths, capsys):
+    write_catalog(paths)
+    write_page(paths, "zh/content/项目概述/核心概念.md")
+    assert run("site", str(repo), "--json") == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["ok"] is True
+    assert data["draft"] is True
+    assert data["pages"] == 1
+
+
+def test_site_corrupt_metadata_downgrades_to_draft(repo, paths):
+    paths.ensure()
+    write_page(paths, "zh/content/项目概述/核心概念.md")
+    paths.metadata_file.write_text("{broken", encoding="utf-8")
+    assert run("site", str(repo)) == 0
+    meta = json.loads(paths.metadata_file.read_text(encoding="utf-8"))
+    assert meta["_draft"] is True
+
+
+def test_site_auto_finalizes_full_resolution(repo, paths, capsys):
+    write_catalog(paths)
+    run("plan", str(repo))
+    for n in flatten(valid_catalog()):
+        p = paths.root / n.output
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(valid_page(n.title), encoding="utf-8")
+        TaskStore(paths).update(n.id, status="done")
+    TaskStore(paths).update("catalog", status="done")
+    run("finalize", str(repo))  # expands the manifest with the overview task
+    paths.overview_file.parent.mkdir(parents=True, exist_ok=True)
+    paths.overview_file.write_text("# demo Wiki 总览\n\n概览内容。\n", encoding="utf-8")
+    TaskStore(paths).update("overview", status="done")
+    assert not paths.metadata_file.exists()  # second finalize never ran
+
+    capsys.readouterr()  # flush finalize/plan output before the site run
+    assert run("site", str(repo), "--json") == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["draft"] is False
+    assert data["finalized"] is True
+    meta = json.loads(paths.metadata_file.read_text(encoding="utf-8"))
+    assert meta.get("_draft") is None
+    assert meta["wiki_overview"].startswith("# demo Wiki 总览")
+    payload = extract_payload(paths.site_file.read_text(encoding="utf-8"))
+    assert any(p["id"] == "overview" for p in payload["pages"])
 
 
 def test_site_with_no_content_at_all_fails_cleanly(repo, paths, capsys):

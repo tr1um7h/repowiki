@@ -4,10 +4,17 @@ Reads every generated page plus the overview, embeds the source lines behind
 each ``file://`` reference, and inlines the vendored markdown/mermaid JS.
 The result (``<locale>/wiki.html``) opens in any browser with zero network
 and zero server — double-click, or share the single file.
+
+Rendering is progressive: while tasks are still in flight (e.g. module-scoped
+generation), a draft metadata is written and only finished pages render;
+once every task is done, ``site`` runs the real finalize and renders the
+full-resolution wiki — same command, one shot, no extra steps.
 """
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import webbrowser
@@ -19,21 +26,92 @@ from .errors import UsageError
 from .i18n import strings
 from .output import emit
 from .paths import WikiPaths
-from .state import now_iso
+from .state import TaskStore, now_iso
 from .validate import extract_refs
 
 MAX_SNIPPET_LINES = 20_000  # larger spans are skipped rather than bloating the file
 
 
-def run_site(paths: WikiPaths, open_browser: bool, as_json: bool) -> int:
+# --- progressive metadata (draft ↔ full) ---
+
+def _load_metadata(paths: WikiPaths) -> dict | None:
+    """Parsed metadata, or None when missing / corrupt / still a draft."""
     if not paths.metadata_file.is_file():
-        raise UsageError(
-            f"未找到 {paths.metadata_file}：请先完成全部任务并运行 `repowiki finalize <repo>`"
-        )
+        return None
     try:
-        metadata = json.loads(paths.metadata_file.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as e:
-        raise UsageError(f"repowiki-metadata.json 损坏（{e}）：请重新运行 `repowiki finalize <repo>`") from e
+        return json.loads(paths.metadata_file.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+
+
+def _has_content(paths: WikiPaths) -> bool:
+    return paths.content_dir.is_dir() and any(paths.content_dir.rglob("*.md"))
+
+
+def _all_tasks_done(paths: WikiPaths) -> bool:
+    """True when the manifest includes the overview task and everything is done.
+    An absent overview task means finalize would still expand the manifest
+    (first-run exit 3), so the wiki is not at full resolution yet."""
+    try:
+        tasks = TaskStore(paths).load().get("tasks") or {}
+    except Exception:
+        return False
+    if not tasks or "overview" not in tasks:
+        return False
+    return all(t.get("status") == "done" for t in tasks.values())
+
+
+def _write_draft_metadata(paths: WikiPaths) -> dict:
+    """Minimal placeholder letting `site` render a partial wiki. The real
+    `finalize` atomically replaces it once every task is done."""
+    draft = {
+        "wiki_repo": {"name": paths.repo_root.name},
+        "wiki_overview": "",
+        "generatedAt": now_iso(),
+        "_draft": True,
+        "draft_note": "Draft metadata for progressive rendering (partial completion); "
+                      "`repowiki finalize` replaces it with the full document.",
+    }
+    paths.meta_dir.mkdir(parents=True, exist_ok=True)
+    tmp = paths.metadata_file.with_name(f".{paths.metadata_file.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(draft, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, paths.metadata_file)
+    return draft
+
+
+def _ensure_metadata(paths: WikiPaths, has_pages: bool) -> tuple[dict, bool, bool]:
+    """Progressive gate: return (metadata, is_draft, finalized_now).
+
+    - Full metadata present → render as-is.
+    - Missing, corrupt, or draft metadata with every task done → run the real
+      finalize (silently; the site summary reports it) and render the
+      full-resolution wiki.
+    - Partial progress (module/scoped generation) → write the draft metadata
+      and render only the finished pages.
+    """
+    meta = _load_metadata(paths)
+    if meta is not None and not meta.get("_draft"):
+        return meta, False, False
+    from .metadata import run_finalize  # lazy: mirrors cli.py's command wiring
+
+    if has_pages and _all_tasks_done(paths):
+        # keep stdout clean: the site command owns the output contract
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = run_finalize(paths, as_json=False)
+        if rc == 0:
+            meta = _load_metadata(paths)
+            if meta is not None:
+                return meta, False, True
+    if not has_pages:
+        raise UsageError(
+            f"未找到任何已生成的 wiki 页面（{paths.content_dir} 为空）："
+            "请先运行 `repowiki plan` 并生成页面；若已全部完成，运行 `repowiki finalize <repo>`"
+        )
+    return _write_draft_metadata(paths), True, False
+
+
+def run_site(paths: WikiPaths, open_browser: bool, as_json: bool) -> int:
+    metadata, is_draft, finalized_now = _ensure_metadata(paths, _has_content(paths))
 
     nodes = _ordered_nodes(paths)
     pages = _collect_pages(paths, metadata, nodes)
@@ -64,6 +142,8 @@ def run_site(paths: WikiPaths, open_browser: bool, as_json: bool) -> int:
     summary = {
         "ok": True,
         "site": str(out),
+        "draft": is_draft,
+        "finalized": finalized_now,
         "pages": len(pages),
         "snippets": len(snippets),
         "size_mb": round(out.stat().st_size / 1024 / 1024, 2),
@@ -73,11 +153,19 @@ def run_site(paths: WikiPaths, open_browser: bool, as_json: bool) -> int:
 
 
 def _site_human(r: dict) -> str:
-    return (
-        f"✓ 站点已生成: {r['site']}\n"
-        f"  页面 {r['pages']} · 源码片段 {r['snippets']} · 体积 {r['size_mb']} MB\n"
-        f"  单文件离线可用：浏览器直接打开即可（--open 自动打开）"
-    )
+    lines = [
+        f"✓ 站点已生成: {r['site']}",
+        f"  页面 {r['pages']} · 源码片段 {r['snippets']} · 体积 {r['size_mb']} MB",
+    ]
+    if r.get("draft"):
+        lines.append(
+            "  草稿模式（渐进式）：仅含已完成页面；全部任务完成后重跑 `repowiki site`"
+            " 将自动 finalize 并升级为完整站点"
+        )
+    elif r.get("finalized"):
+        lines.append("  已自动 finalize：检测到全部任务完成，全量 metadata 已生成，完整站点一次渲染")
+    lines.append("  单文件离线可用：浏览器直接打开即可（--open 自动打开）")
+    return "\n".join(lines)
 
 
 # --- content assembly ---

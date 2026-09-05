@@ -90,7 +90,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=lambda a, paths: run_finalize(paths, as_json=a.json))
 
-    p = sub.add_parser("site", help="render the finished wiki into one offline HTML file (.repowiki/<locale>/wiki.html)")
+    p = sub.add_parser("site", help="render the wiki into one offline HTML file (.repowiki/<locale>/wiki.html); "
+                                    "progressive by default: partial progress renders a draft site, "
+                                    "once all tasks are done it auto-finalizes the full site")
     p.add_argument("repo")
     p.add_argument("--open", dest="open_browser", action="store_true",
                    help="open the generated file in the default browser")

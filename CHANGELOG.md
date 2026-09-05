@@ -2,6 +2,16 @@
 
 **中文** | [English](CHANGELOG.en.md)
 
+## Unreleased
+
+### 新增
+
+- **`site` 渐进式渲染**：不再要求先 finalize。部分完成（如按模块生成）时自动写入草稿
+  metadata（`_draft: true`）并仅渲染已完成页面；识别到全部任务（含 overview）完成后，
+  `site` 自动执行 finalize 并一次性渲染满分辨率完整站点。损坏的 metadata 也会按同样
+  规则自愈（全完成→重建全量，未完成→降级草稿）。站点摘要新增 `draft`/`finalized`
+  字段与对应人类可读提示；`--json` 模式下嵌套 finalize 的输出不再污染 stdout。
+
 ## 0.3.2 — 2026-09-05
 
 ### 新增
