@@ -94,3 +94,15 @@ _Avoid_: deadlock, zombie task
 **Heartbeat**:
 A worker's periodic renewal of its claim during execution; the only liveness signal.
 _Avoid_: ping, health check
+
+**Rate-limit monitor**:
+The mechanism that turns agent rate-limit symptoms reported by the driving session
+(stream interrupts / timeouts / cancels) into a deterministic dispatch cap; states are
+only normal / throttled / probing / recovering.
+_Avoid_: circuit breaker (that is the attempts cap), rate limiter
+
+**Dispatch cap**:
+The number of live claims `next --claim` may create right now; derived from the
+rate-limit monitor's state — in the normal state it equals the declared fleet size or
+is unlimited.
+_Avoid_: concurrency (the driver decides that itself), quota

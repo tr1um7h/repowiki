@@ -2,6 +2,28 @@
 
 [中文](CHANGELOG.md) | **English**
 
+## Unreleased
+
+### Added
+
+- **Rate-limit monitor `repowiki monitor <repo>`**: turns rate-limit symptoms observed
+  by the driving session into deterministic concurrency reduction. The driver reports
+  symptoms via `--report stream_error|timeout|cancel --worker <name>` when a subagent
+  dies abnormally (`ok` resets the streak); 5 consecutive `stream_error` in a 10-minute
+  sliding window, or a single `timeout`, or a single `cancel` enters throttled —
+  `next --claim` then allows only 1 live claim (the throttle signal is also returned
+  when the queue looks empty, so "throttled" is never mistaken for "no tasks"), while
+  other workers wait per the "empty and busy>0" contract. After a 30-minute cooldown
+  (`REPOWIKI_MONITOR_COOLDOWN`) it enters probing (the single slot is the probe); when
+  the probe's task passes check it enters recovering, and every subsequent successful
+  task raises the dispatch cap by 1 until the fleet size declared via `--workers N` is
+  restored; new symptoms or no progress during probing return to throttled. The state
+  machine is evaluated lazily (on next/check/status/monitor — no daemon), the ledger
+  `state/monitor.json` follows the flock + atomic-replace discipline, and corruption
+  preserves the scene with an explicit error. `status` gains a `monitor` section. New
+  env vars `REPOWIKI_MONITOR_WINDOW` (default 600s) and `REPOWIKI_MONITOR_COOLDOWN`
+  (default 1800s). 19 new tests (173 total green).
+
 ## 0.3.2 — 2026-09-05
 
 ### Added

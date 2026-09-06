@@ -14,6 +14,7 @@ from .dispatch import run_check, run_next, run_release, run_status, run_touch, r
 from .errors import ConflictError, StateError, UsageError  # noqa: F401 (re-exported)
 from .knowledge import run_knowledge
 from .metadata import run_finalize
+from .monitor import run_monitor
 from .output import emit_error
 from .paths import WikiPaths
 from .plan import run_plan
@@ -115,6 +116,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("repo")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=lambda a, paths: run_status(paths, as_json=a.json))
+
+    p = sub.add_parser("monitor",
+                       help="rate-limit sentinel: report agent-session symptoms, view/adjust the dispatch cap")
+    p.add_argument("repo")
+    p.add_argument("--report", default=None, choices=["stream_error", "timeout", "cancel", "ok"],
+                   help="report a symptom seen in a worker session (ok = a session finished fine)")
+    p.add_argument("--worker", default=None, help="worker the symptom is attributed to")
+    p.add_argument("--workers", type=int, default=None,
+                   help="declare the fleet size (0 = unlimited); becomes the cap ceiling during recovery")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=lambda a, paths: run_monitor(
+        paths, report=a.report, worker=a.worker, workers=a.workers, as_json=a.json))
 
     p = sub.add_parser("clean", help="remove .repowiki/state entirely (wiki output is kept)")
     p.add_argument("repo")

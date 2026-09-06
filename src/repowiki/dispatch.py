@@ -13,6 +13,7 @@ import socket
 
 from .catalog import flatten, validate_catalog
 from .errors import ConflictError, UsageError
+from .monitor import Monitor
 from .output import emit
 from .paths import WikiPaths
 from . import tasks as task_builders
@@ -51,14 +52,23 @@ def run_next(paths: WikiPaths, claim: bool, worker: str | None, as_json: bool) -
     if not paths.index_file.exists():
         raise UsageError("尚未规划任务，请先运行 `repowiki plan <repo>`")
     worker = worker or _worker_id()
+    throttle: dict | None = None
+    live_claims = store.stats()["busy"]
+    cap = Monitor(paths).effective_cap() if claim else None
     result_tasks: list[dict] = []
     if claim:
-        # 队列是纯 FIFO 拉取，一次只发放一个任务（worker 契约：一次只持有一个认领）
-        for task in store.ready_tasks(limit=1):
-            try:
-                result_tasks.append(store.claim(task["id"], worker))
-            except ConflictError:
-                pass  # lost the race; the next `next` will re-pick
+        if cap is not None and live_claims >= cap:
+            # 限流监视器：存活认领已达上限（throttle/probe 阶段），不再发放——
+            # worker 侧表现为「空且 busy>0」，按契约等待重试。
+            # 队列恰好为空时也要给出信号，避免「限流中」被误读为「没有任务」
+            throttle = {"active": True, "cap": cap, "live": live_claims}
+        else:
+            # 队列是纯 FIFO 拉取，一次只发放一个任务（worker 契约：一次只持有一个认领）
+            for task in store.ready_tasks(limit=1):
+                try:
+                    result_tasks.append(store.claim(task["id"], worker))
+                except ConflictError:
+                    pass  # lost the race; the next `next` will re-pick
     else:
         result_tasks = store.ready_tasks(limit=1)
 
@@ -69,6 +79,7 @@ def run_next(paths: WikiPaths, claim: bool, worker: str | None, as_json: bool) -
         "claimed": claim,
         "tasks": payload,
         "busy": stats["busy"],
+        "throttle": throttle,
         "progress": {"total": stats["total"], "by_status": stats["by_status"], "current_phase": stats["current_phase"]},
     }
     emit(out, _next_human, as_json)
@@ -78,8 +89,14 @@ def run_next(paths: WikiPaths, claim: bool, worker: str | None, as_json: bool) -
 def _next_human(out: dict) -> str:
     lines = []
     if not out["tasks"]:
-        hint = f"，{out['busy']} 个任务执行中（稍后重试）" if out["busy"] else ""
-        lines.append(f"当前无可领取任务{hint}（共 {out['progress']['total']} 个任务，状态 {out['progress']['by_status']}）")
+        if out.get("throttle"):
+            t = out["throttle"]
+            lines.append(
+                f"限流中：存活认领 {t['live']}/{t['cap']}，暂不发放（`repowiki monitor <repo>` 查看详情）"
+            )
+        else:
+            hint = f"，{out['busy']} 个任务执行中（稍后重试）" if out["busy"] else ""
+            lines.append(f"当前无可领取任务{hint}（共 {out['progress']['total']} 个任务，状态 {out['progress']['by_status']}）")
     for t in out["tasks"]:
         lines += [f"[{t['kind']}] {t['id']}  {t['title']}",
                   f"  规格: {t['spec_path']}",
@@ -98,7 +115,8 @@ def run_release(paths: WikiPaths, task_id: str, force: bool, as_json: bool) -> i
 def run_status(paths: WikiPaths, as_json: bool) -> int:
     store = TaskStore(paths)
     stats = store.stats()
-    emit({"ok": True, **stats}, _status_human, as_json)
+    mon = Monitor(paths).status_payload()
+    emit({"ok": True, "monitor": mon, **stats}, _status_human, as_json)
     return 0
 
 
@@ -106,6 +124,13 @@ def _status_human(out: dict) -> str:
     lines = [f"任务总数 {out['total']}  当前阶段 {out['current_phase']}"]
     for status, n in sorted(out["by_status"].items()):
         lines.append(f"  {status}: {n}")
+    mon = out.get("monitor") or {}
+    if mon.get("state") == "throttled":
+        lines.append(f"  限流中：发放上限 1（原因 {mon.get('throttle_reason')}；`repowiki monitor <repo>` 查看/上报）")
+    elif mon.get("state") == "probing":
+        lines.append("  限流探测期：仅发放 1 个任务（探针），成功后逐步恢复并发")
+    elif mon.get("state") == "recovering":
+        lines.append(f"  限流恢复期：发放上限 {mon.get('cap')}，随任务成功逐步提高")
     for f in out["failed"]:
         lines.append(f"  ✗ failed: {f['id']} {f['title']}")
     for e in out["exhausted"]:
@@ -256,6 +281,11 @@ def run_check(paths: WikiPaths, task_id: str | None, as_json: bool,
             store.heartbeat(tid)  # validating a task also refreshes its claim
         results.append(r)
         all_ok = all_ok and r["ok"]
+
+    # a task flipping to done is the monitor's health signal: it advances the
+    # probe → recovery ramp after rate-limit throttling
+    if any(r.get("status") == "done" and not r.get("readonly") for r in results):
+        Monitor(paths).on_task_success()
 
     _emit_check(as_json, ok=all_ok, results=results)
     return 0 if all_ok else 1

@@ -75,3 +75,13 @@ _Avoid_: 死锁、僵尸任务
 **心跳**:
 worker 执行期间对认领的定期续期，是唯一的存活信号。
 _Avoid_: ping、健康检查
+
+**限流监视器**:
+把驱动会话上报的 agent 限流症状（流式中断/超时/取消）转成确定性发放上限的机制；
+状态只有 normal / throttled / probing / recovering。
+_Avoid_: 熔断器（那是 attempts 上限的事）、限速器
+
+**发放上限**:
+`next --claim` 当前允许存在的存活认领数量；由限流监视器状态推导，normal 态等于
+声明的集群规模或无限制。
+_Avoid_: 并发数（那是 driver 自行决定的派生量）、配额

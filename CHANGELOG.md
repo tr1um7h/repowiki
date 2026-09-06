@@ -6,6 +6,18 @@
 
 ### 新增
 
+- **限流监视器 `repowiki monitor <repo>`**：把驱动会话观察到的 agent 限流症状转成确定性的
+  并发降级。驱动方在 subagent 异常退出时 `--report stream_error|timeout|cancel --worker <名>`
+  上报（`ok` 可重置连击）；10 分钟滑动窗口内连续 5 次 `stream_error`、或 1 次 `timeout`、
+  或 1 次 `cancel` 即进入 throttled——`next --claim` 只允许 1 个存活认领（队列为空时同样
+  返回 throttle 信号，避免「限流中」被误读为「没有任务」），其余 worker 按「空且 busy>0」
+  契约等待。30 分钟冷却（`REPOWIKI_MONITOR_COOLDOWN` 可调）后进入 probing（该唯一名额即
+  探针）；探针任务 check 通过进入 recovering，此后每成功一个任务发放上限 +1，直到回到
+  `--workers N` 声明的集群规模；探测期内再遇症状或超时无进展则回到 throttled 重新冷却。
+  状态机全部惰性求值（挂在 next/check/status/monitor 上，无常驻进程），账本
+  `state/monitor.json` 沿用 flock + 原子替换纪律，损坏时保留现场报错。`status` 输出新增
+  `monitor` 段。新增环境变量 `REPOWIKI_MONITOR_WINDOW`（默认 600 秒）、
+  `REPOWIKI_MONITOR_COOLDOWN`（默认 1800 秒）。新增 19 个测试（173 个全绿）。
 - **`site` 渐进式渲染**：不再要求先 finalize。部分完成（如按模块生成）时自动写入草稿
   metadata（`_draft: true`）并仅渲染已完成页面；识别到全部任务（含 overview）完成后，
   `site` 自动执行 finalize 并一次性渲染满分辨率完整站点。损坏的 metadata 也会按同样

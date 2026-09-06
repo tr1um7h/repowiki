@@ -133,6 +133,10 @@ class WikiPaths:
         return self.state_dir / "index.json"
 
     @property
+    def monitor_file(self) -> Path:
+        return self.state_dir / "monitor.json"
+
+    @property
     def content_dir(self) -> Path:
         return self.root / self.locale / "content"
 

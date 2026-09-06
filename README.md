@@ -223,7 +223,8 @@ done
 | `site [--open]` | 把完成的 wiki 渲染成单文件离线 HTML（`<locale>/wiki.html`：导航+搜索+mermaid+源码弹层）；要求先 finalize；`--open` 生成后用默认浏览器打开 |
 | `update [--since <sha>]` | git diff → 受影响页面（含祖先链）→ 增量重写任务（附「更新摘要」）；仅识别**已提交**变更（since..HEAD），工作区未提交改动不可见 |
 | `knowledge` | 追加知识卡片任务集（六类机制卡片 + 模块文档） |
-| `status` | 进度 / 失败列表 / 过期认领 |
+| `status` | 进度 / 失败列表 / 过期认领 / 限流状态 |
+| `monitor [--report stream_error\|timeout\|cancel\|ok] [--workers N]` | 限流监视器：上报 agent 会话症状（流式中断/超时/取消），越阈自动把 `next` 的存活认领上限压到 1，冷却 30 分钟后单 worker 探测，探针成功后每成功一个任务发放上限 +1 直到回到 `--workers` 声明的规模 |
 | `clean` | 删除整个 `state/`（wiki 产出保留；失去 update/续跑/幂等 plan） |
 
 退出码：`0` 成功，`1` 校验失败或用法错误，`2` 状态冲突（任务被他人认领），`3` 进展性等待（finalize 已创建 overview 任务，完成后再次运行即可）。
@@ -236,6 +237,10 @@ done
   attempts+1，毒任务上限照常生效），无需人工 `release --force`；活认领靠 `touch` 心跳续期防误抢
   （repowiki 是短命 CLI 进程，记录的 pid 无存活意义，心跳是唯一存活信号）。
 - **watch 不假活**：过期认领不计入「执行中」，worker 全部死亡时停滞可被及时报告而非干等超时。
+- **限流自适应**：`monitor` 子命令把驱动会话观察到的限流症状（流式中断 ×5 / 超时 ×1 / 取消 ×1，
+  10 分钟滑动窗口）转成确定性的发放上限——触发后 `next --claim` 只允许 1 个存活认领，
+  30 分钟冷却后由单 worker 探测，探针成功则线性爬回声明规模（`--workers N`）。
+  阈值与时长可用 `REPOWIKI_MONITOR_WINDOW` / `REPOWIKI_MONITOR_COOLDOWN` 调整。
 - **确定性优先**：锚点、行号区间、H1、路径分隔符由程序自动修复；
   只有语义缺陷（缺章节、引用不存在文件、mermaid 不闭合）才判失败。
 - **断点续跑**：每任务状态落盘（`state/index.json`），随时中断随时继续；产出语言持久化于 `state/locale`。
@@ -243,7 +248,7 @@ done
 - **自动瘦身**：finalize 成功后自动清除运行时产物（`state/claims/`、`state/tasks/`），
   保留 `index.json`/`catalog.json`/`knowledge.json` 供增量更新与幂等重跑；
   不需要增量更新可执行 `repowiki clean <repo>` 删除全部状态（wiki 产出不受影响）。
-- **测试**：140 个单测覆盖竞态、孤儿认领自动回收、校验规则正反例、增量映射、知识聚合、双语产出（zh/en）、单文件站点生成、损坏状态文件与非法输入的友好报错（`pytest`；CI 矩阵覆盖 ubuntu/macos/windows × Python 3.10-3.13）。
+- **测试**：173 个单测覆盖竞态、孤儿认领自动回收、校验规则正反例、增量映射、知识聚合、双语产出（zh/en）、单文件站点生成、限流监视器状态机、损坏状态文件与非法输入的友好报错（`pytest`；CI 矩阵覆盖 ubuntu/macos/windows × Python 3.10-3.13）。
 
 ## 设计取舍
 

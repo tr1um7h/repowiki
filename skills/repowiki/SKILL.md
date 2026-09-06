@@ -52,6 +52,7 @@ catalog 任务完成后所有页面任务相互独立，可安全并行：
 2. 主 agent 派 N 个**等价** subagent 执行同一 worker 循环。
    **禁止给 worker 指定任务 ID 或清单**：队列是全局 FIFO，分工完全由 `next` 决定；
    主 agent 只决定 worker 数量与 `--worker` 命名。
+   派发后声明集群规模一次：`repowiki monitor <repo> --workers N`（限流恢复爬坡的上限）。
 3. worker 循环（每个 subagent 独立执行）：
 
 ```
@@ -92,12 +93,31 @@ loop:
    exhausted 毒任务用 `release --task <id> --force` 重置；stale 认领会自动回队列
    （默认 15 分钟），无需人工释放，确认 worker 是否存活、必要时补派即可。
 
+### 限流监视器（subagent 被限流时的自动降并发）
+
+subagent 死于限流症状时**不要立即补派**——先上报，让队列自动降并发、冷却、探测、恢复：
+
+- **上报症状**（主 agent 在 subagent 异常退出时执行，这是 CLI 唯一无法自行感知的输入）：
+  `repowiki monitor <repo> --report stream_error|timeout|cancel --worker <名字>`
+  - `stream_error`：流式恢复中断类报错；`timeout`：约 10 分钟无任何响应；`cancel`：会话被取消；
+    worker 正常跑完一整个任务可上报 `--report ok`（重置连击计数，非必需）。
+- **自动响应**：10 分钟窗口内连续 5 次 `stream_error`、或 1 次 `timeout`、或 1 次 `cancel`
+  → 进入 **throttled**：`next --claim` 只允许 1 个存活认领（其余 worker 领到空任务 +
+  throttle 标记，按契约等待即可，**不要杀掉多余 worker**）；
+  30 分钟冷却后进入 **probing**（单 worker 即探针）；探针任务 check 通过 → **recovering**，
+  此后每成功一个任务发放上限 +1，直到回到 `--workers` 声明的规模；探针期间再遇症状或
+  超时无进展则回到 throttled 重新冷却。
+- **查看**：`repowiki monitor <repo> [--json]`（status 也会显示限流状态）；
+  误触发要立即解除时删除 `<repo>/.repowiki/state/monitor.json`。
+
 ## 环境变量
 
 - `REPOWIKI_STALE_SECONDS`：认领过期窗口（默认 900 秒 = 15 分钟）。worker 死亡后其任务
   最长冻结这么久即自动回队列；worker 遵守 touch 纪律时不会被误抢，一般无需调整。
 - `REPOWIKI_MAX_ATTEMPTS`：单任务最大尝试次数（默认 3），超过后 exhausted，
   需 `release --task <id> --force` 重置。
+- `REPOWIKI_MONITOR_WINDOW`：限流症状统计窗口（默认 600 秒 = 10 分钟）。
+- `REPOWIKI_MONITOR_COOLDOWN`：限流后的冷却/探测超时时长（默认 1800 秒 = 30 分钟）。
 
 ## 硬性规则
 

@@ -63,6 +63,8 @@ safely in parallel:
    **Never assign task IDs or task lists to workers**: the queue is a global FIFO and
    the division of work is decided entirely by `next`; the main agent only chooses the
    worker count and `--worker` names.
+   After spawning, declare the fleet size once: `repowiki monitor <repo> --workers N`
+   (the ceiling for the rate-limit recovery ramp).
 3. The worker loop (each subagent runs independently):
 
 ```
@@ -110,6 +112,28 @@ code 3 (it created the overview task — normal progress).
    15 minutes) and need no manual release — just confirm whether workers are alive and
    spawn replacements if needed.
 
+### Rate-limit monitor (automatic concurrency reduction when subagents get throttled)
+
+When a subagent dies of rate-limit symptoms, **do not respawn immediately** — report
+first, and let the queue throttle, cool down, probe, and recover on its own:
+
+- **Report the symptom** (the main agent runs this when a subagent exits abnormally;
+  it is the only input the CLI cannot observe on its own):
+  `repowiki monitor <repo> --report stream_error|timeout|cancel --worker <name>`
+  - `stream_error`: stream-recovery interruption errors; `timeout`: roughly 10 minutes
+    with no response; `cancel`: the session was cancelled. When a worker completes a
+    full task normally you may report `--report ok` (resets the streak; not required).
+- **Automatic response**: 5 consecutive `stream_error` in a 10-minute window, or a
+  single `timeout`, or a single `cancel` → **throttled**: `next --claim` allows only
+  1 live claim (other workers get an empty task list plus a throttle marker and wait
+  per the contract — **do not kill the spare workers**). After a 30-minute cooldown it
+  enters **probing** (the single slot is the probe); when the probe's task passes check
+  → **recovering**: every subsequent successful task raises the dispatch cap by 1 until
+  the declared `--workers` scale is restored. New symptoms or no progress during probing
+  return to throttled for another cooldown.
+- **Inspect**: `repowiki monitor <repo> [--json]` (`status` also shows the throttle
+  state); to clear a false trigger immediately, delete `<repo>/.repowiki/state/monitor.json`.
+
 ## Environment variables
 
 - `REPOWIKI_STALE_SECONDS`: claim expiry window (default 900 seconds = 15 minutes).
@@ -118,6 +142,8 @@ code 3 (it created the overview task — normal progress).
   need to adjust.
 - `REPOWIKI_MAX_ATTEMPTS`: max attempts per task (default 3); beyond that it becomes
   exhausted and needs `release --task <id> --force` to reset.
+- `REPOWIKI_MONITOR_WINDOW`: rate-limit symptom window (default 600 seconds = 10 minutes).
+- `REPOWIKI_MONITOR_COOLDOWN`: post-throttle cooldown / probe timeout (default 1800 seconds = 30 minutes).
 
 ## Hard rules
 
