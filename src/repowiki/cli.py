@@ -10,6 +10,7 @@ import argparse
 import sys
 
 from . import __version__
+from ._build_info import __commit__
 from .dispatch import run_check, run_next, run_release, run_status, run_touch, run_watch
 from .errors import ConflictError, StateError, UsageError  # noqa: F401 (re-exported)
 from .knowledge import run_knowledge
@@ -28,7 +29,11 @@ def build_parser() -> argparse.ArgumentParser:
         prog="repowiki",
         description="Deterministic repo-wiki build system driven by coding agents (zero LLM, zero network).",
     )
-    parser.add_argument("--version", action="version", version=f"repowiki {__version__}")
+    version_str = f"repowiki {__version__}"
+    commit = __commit__
+    if commit:
+        version_str += f" (commit {commit})"
+    parser.add_argument("--version", action="version", version=version_str)
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("plan", help="scan repo and create the task manifest (phase 1: catalog task)")
