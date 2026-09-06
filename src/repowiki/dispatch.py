@@ -28,6 +28,21 @@ from .validate import (
 )
 
 
+def _run_site_silent(paths: WikiPaths) -> None:
+    """Run site command without output (for auto-site after check)."""
+    from .site import run_site  # lazy import to avoid circular dependency
+    import io
+    import contextlib
+    
+    # Suppress all output to avoid cluttering check output
+    with contextlib.redirect_stdout(io.StringIO()), \
+         contextlib.redirect_stderr(io.StringIO()):
+        try:
+            run_site(paths, open_browser=False, as_json=False)
+        except Exception:
+            pass  # Silently ignore site errors during auto-update
+
+
 def _worker_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}"
 
@@ -228,7 +243,7 @@ def run_watch(paths: WikiPaths, interval: float, timeout: float, as_json: bool) 
 
 def run_check(paths: WikiPaths, task_id: str | None, as_json: bool,
               select_all: bool = False, worker: str | None = None,
-              force: bool = False) -> int:
+              force: bool = False, auto_site: bool = False) -> int:
     store = TaskStore(paths)
     data = store.load()
     if not data["tasks"]:
@@ -286,6 +301,9 @@ def run_check(paths: WikiPaths, task_id: str | None, as_json: bool,
     # probe → recovery ramp after rate-limit throttling
     if any(r.get("status") == "done" and not r.get("readonly") for r in results):
         Monitor(paths).on_task_success()
+        # Progressive rendering: auto-update wiki HTML after successful task completion
+        if auto_site:
+            _run_site_silent(paths)
 
     _emit_check(as_json, ok=all_ok, results=results)
     return 0 if all_ok else 1

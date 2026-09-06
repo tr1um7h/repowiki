@@ -63,10 +63,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="check all in_progress/failed tasks (crash recovery / main agent)")
     p.add_argument("--worker", default=None, help="caller identity; in_progress tasks held by others are refused")
     p.add_argument("--force", action="store_true", help="check even if claimed by another worker")
+    p.add_argument("--no-auto-site", dest="auto_site", action="store_false",
+                   help="disable automatic wiki HTML update after successful check")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=lambda a, paths: run_check(
         paths, task_id=a.task, as_json=a.json, select_all=a.select_all,
-        worker=a.worker, force=a.force))
+        worker=a.worker, force=a.force, auto_site=a.auto_site), auto_site=True)
 
     p = sub.add_parser("touch", help="refresh a task's claim while executing (heartbeat)")
     p.add_argument("repo")
