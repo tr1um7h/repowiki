@@ -13,4 +13,4 @@ venv/
 # local agent-session artifacts
 .z*/
 .repowiki
-
+_build_info.py

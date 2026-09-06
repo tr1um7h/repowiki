@@ -38,8 +38,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("plan", help="scan repo and create the task manifest (phase 1: catalog task)")
     p.add_argument("repo", help="path to the repository")
-    p.add_argument("--replan", action="store_true", help="discard existing catalog and plan again")
-    p.add_argument("--force", action="store_true", help="with --replan: proceed even if tasks are in flight")
+    p.add_argument("--replan", action="store_true", help="reset task state and plan again (existing wiki output is backed up to .repowiki-backup-<timestamp>/; non-interactive runs must pass --force)")
+    p.add_argument("--force", action="store_true", help="with --replan: proceed even if tasks are in flight, and skip the interactive confirmation")
     p.add_argument("--max-pages", type=int, default=None, help="cap number of page tasks (for cheap trial runs)")
     p.add_argument("--knowledge", action="store_true", help="also append the knowledge-card task set")
     p.add_argument("--locale", default="auto", choices=["auto", "zh", "en"],
