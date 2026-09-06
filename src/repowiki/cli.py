@@ -19,6 +19,7 @@ from .monitor import run_monitor
 from .output import emit_error
 from .paths import WikiPaths
 from .plan import run_plan
+from .restore import run_restore
 from .site import run_site
 from .state import run_clean
 from .updater import run_update
@@ -135,6 +136,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=lambda a, paths: run_monitor(
         paths, report=a.report, worker=a.worker, workers=a.workers, as_json=a.json))
+
+    p = sub.add_parser("restore", help="rebuild wiki pages from tool-call records (snapshot or tool db)")
+    p.add_argument("repo")
+    p.add_argument("--db", default=None, help="sqlite source (default: .repowiki/db/recovery.db snapshot, else $REPOWIKI_RECOVERY_DB)")
+    p.add_argument("--locale", default=None, help="only restore this locale subdir (e.g. en)")
+    p.add_argument("--rowid-min", type=int, default=None, help="only consider part rows with rowid > N (default: from recovery-manifest.json)")
+    p.add_argument("--out", default=None, help="output root (default <repo>/.repowiki)")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=lambda a, paths: run_restore(
+        a.repo, db=a.db, locale=a.locale, rowid_min=a.rowid_min,
+        out=a.out, dry_run=a.dry_run, as_json=a.json))
 
     p = sub.add_parser("clean", help="remove .repowiki/state entirely (wiki output is kept)")
     p.add_argument("repo")

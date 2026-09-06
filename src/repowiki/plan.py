@@ -73,11 +73,16 @@ RECOVERY_SNAPSHOT_NAME = "recovery.db"
 
 
 def _recovery_db_path() -> Path | None:
-    """Source tool-record db (ZCode); overridable via REPOWIKI_RECOVERY_DB."""
-    p = Path(os.environ.get(
-        RECOVERY_DB_ENV,
-        ".repowiki/db/recovery.db",
-    ))
+    """Source tool-record db; strictly opt-in via REPOWIKI_RECOVERY_DB.
+
+    No built-in default location: when the variable is unset (or the path
+    does not exist) there is no source db — manifests carry null recovery
+    fields and recovery relies solely on existing .repowiki/db snapshots.
+    """
+    p = os.environ.get(RECOVERY_DB_ENV)
+    if not p:
+        return None
+    p = Path(p)
     return p if p.exists() else None
 
 
