@@ -23,6 +23,46 @@
   preserves the scene with an explicit error. `status` gains a `monitor` section. New
   env vars `REPOWIKI_MONITOR_WINDOW` (default 600s) and `REPOWIKI_MONITOR_COOLDOWN`
   (default 1800s). 19 new tests (173 total green).
+- **Progressive site rendering**: `site` no longer requires prior `finalize`. With
+  partial completion (e.g., module-scoped generation) it writes a draft metadata
+  (`_draft: true`) and renders only finished pages; once all tasks (including the
+  overview) are done, `site` automatically runs `finalize` and renders the full-resolution
+  wiki in one shot. Corrupted metadata follows the same self-healing rule (all done →
+  rebuild full, incomplete → degrade to draft). Site summary gains `draft`/`finalized`
+  fields with human-readable hints; in `--json` mode the nested `finalize` output no
+  longer pollutes stdout.
+
+## 0.4.0 — 2026-09-07
+
+### Added
+
+- Knowledge cards now cover the full lifecycle:
+  - **update ↔ knowledge linkage**: `update` maps changed files against the knowledge plan — cards whose `source_files` changed and modules whose scope was touched each get an incremental refresh task (card updates carry a "## 5. Update Summary" section, enforced by `check` via `is_update`);
+  - **site Knowledge Base chapter**: knowledge module docs and cards join `wiki.html` as regular pages under a dedicated nav chapter — searchable, with source popups and mermaid; card front matter is stripped for display;
+  - **cross-epoch re-arm**: `update` regenerates specs of done `*-update` tasks from the previous round and resets them to pending — fixing the second update round silently doing nothing after a finalize.
+- Knowledge YAML exports fill `source_files`: `_index.yaml` / `_module.yaml` collect the union of card source files falling under each module's scope (previously always empty).
+
+### Fixed
+
+- Removed unreachable dead code in `knowledge.py`.
+
+## 0.3.3 — 2026-09-07
+
+### Fixed
+
+- **Site drawer menu button**: the topbar `#menu-btn` is a dead control on desktop,
+  where the sidebar is always visible; it now only shows on narrow screens (≤900px).
+
+### Documentation
+
+- Replaced the ASCII architecture diagram on both README landing pages with drawn
+  diagrams (Chinese diagram for the Chinese README, English one for the English
+  README); added the interactive architecture HTML and specs
+  (`docs/repowiki-architecture*.html`/`.json`, with light/dark themes, path
+  highlighting, and node search).
+- Softened the "no LLM" self-description: the README lead and features now say
+  "deterministic build"; the package description, CLI `--help`, and module docstring
+  follow suit.
 
 ## 0.3.2 — 2026-09-05
 

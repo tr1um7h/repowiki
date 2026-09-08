@@ -7,23 +7,16 @@
 [![Python ≥ 3.10](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](#可靠性设计)
 
-为任意仓库生成结构化 Wiki 的构建系统——但**不含任何 LLM**。
+为任意仓库生成结构化 Wiki 的构建系统。
 
 `repowiki` 是一个确定性的构建系统：负责任务规划、原子认领、产出校验、自动修复、元数据组装；
 智能工作（读代码、写 wiki）由驱动它的 agent（Claude Code / Codex / OpenCode 等 agent CLI，或人）完成。
 零 API Key、零网络调用、零 agent CLI 依赖——任何「能跑 shell + 读写文件」的执行者都能参与，包括并发。
 Wiki 产出语言自动跟随目标仓库（中文仓库 → `zh/`，英文仓库 → `en/`；`plan --locale` 可显式指定）。
 
-```
-┌────────────┐  plan     ┌─────────────────────────────────────────┐
-│  驱动 agent │ ────────▶ │ .repowiki/state/  任务清单+规格    │
-│ (串行/并发) │ ◀──────── │  catalog → pages → overview 三阶段      │
-│            │  next     │  原子认领 · 断点续跑 · 过期回收           │
-│  写页面/JSON │ ────────▶ │ zh/content/**.md  (校验+自动修复)       │
-└────────────┘  check    │ zh/meta/repowiki-metadata.json          │
-                         │ knowledge/zh/**  (模块+机制卡片)         │
-                         └─────────────────────────────────────────┘
-```
+![repowiki 系统架构图](docs/assets/repowiki-architecture.png)
+
+*交互版架构图：[docs/repowiki-architecture.html](docs/repowiki-architecture.html)（明暗主题 · 路径高亮 · 节点搜索，下载后在浏览器打开）*
 
 ## 为什么是 repowiki
 
@@ -46,7 +39,7 @@ repowiki 走第三条路：**读代码、写 wiki 的智能留给任意 agent，
 
 ## 特性（Features）
 
-- **零 LLM 依赖**：plan / claim / check / 自动修复全是确定性代码，不绑定任何 agent CLI，无需 API Key、零网络调用；
+- **确定性构建**：plan / claim / check / 自动修复全是确定性代码，不绑定任何 agent CLI，无需 API Key、零网络调用；
 - **并发安全**：原子任务认领 + 心跳续期 + 过期自动回收，多个 agent / 进程 / 人可同时参与同一个仓库；
 - **断点续跑**：每任务状态落盘，随时中断随时继续，崩溃不留孤儿认领；
 - **增量更新**：`update` 基于 git diff 只重写受影响页面（含祖先链）；
@@ -220,9 +213,9 @@ done
 | `check --task ID \| --all` | 校验产出；锚点/行号/H1 自动修复；catalog/knowledge-plan 通过后自动展开后续任务；done 为终态（只读报告）；他人认领的任务需 --force |
 | `release --task ID [--force]` | 释放认领（崩溃恢复） |
 | `finalize` | 组装 metadata.json；要求全部任务 done |
-| `site [--open]` | 把完成的 wiki 渲染成单文件离线 HTML（`<locale>/wiki.html`：导航+搜索+mermaid+源码弹层）；要求先 finalize；`--open` 生成后用默认浏览器打开 |
-| `update [--since <sha>]` | git diff → 受影响页面（含祖先链）→ 增量重写任务（附「更新摘要」）；仅识别**已提交**变更（since..HEAD），工作区未提交改动不可见 |
-| `knowledge` | 追加知识卡片任务集（六类机制卡片 + 模块文档） |
+| `site [--open]` | 把完成的 wiki 渲染成单文件离线 HTML（`<locale>/wiki.html`：导航+搜索+mermaid+源码弹层，知识模块文档与卡片纳入「知识库」章）；要求先 finalize；`--open` 生成后用默认浏览器打开 |
+| `update [--since <sha>]` | git diff → 受影响页面（含祖先链）→ 增量重写任务（附「更新摘要」）；同时联动知识库：`source_files` 命中变更的卡片与 scope 命中的模块各建刷新任务；仅识别**已提交**变更（since..HEAD），工作区未提交改动不可见 |
+| `knowledge` | 追加知识卡片任务集（六类机制卡片 + 模块文档）；finalize 时聚合导出 `_index.yaml` / `_module.yaml` |
 | `status` | 进度 / 失败列表 / 过期认领 / 限流状态 |
 | `monitor [--report stream_error\|timeout\|cancel\|ok] [--workers N]` | 限流监视器：上报 agent 会话症状（流式中断/超时/取消），越阈自动把 `next` 的存活认领上限压到 1，冷却 30 分钟后单 worker 探测，探针成功后每成功一个任务发放上限 +1 直到回到 `--workers` 声明的规模 |
 | `clean` | 删除整个 `state/`（wiki 产出保留；失去 update/续跑/幂等 plan） |

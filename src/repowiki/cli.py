@@ -28,7 +28,7 @@ from .updater import run_update
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="repowiki",
-        description="Deterministic repo-wiki build system driven by coding agents (zero LLM, zero network).",
+        description="Deterministic repo-wiki build system driven by coding agents.",
     )
     version_str = f"repowiki {__version__}"
     commit = __commit__

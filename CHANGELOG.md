@@ -24,6 +24,35 @@
   规则自愈（全完成→重建全量，未完成→降级草稿）。站点摘要新增 `draft`/`finalized`
   字段与对应人类可读提示；`--json` 模式下嵌套 finalize 的输出不再污染 stdout。
 
+## 0.4.0 — 2026-09-07
+
+### 新增
+
+- 知识卡片全生命周期补全：
+  - **update 联动知识库**：`update` 把变更文件对照知识规划——`source_files` 命中的卡片、scope 命中的模块各建增量刷新任务（卡片更新规格附「## 5. 更新摘要」小节，`check` 按 `is_update` 校验）；
+  - **site 知识库章**：知识模块文档与卡片作为普通页面纳入 `wiki.html` 侧边栏「知识库」章——可搜索、源码弹层、mermaid 全部生效，卡片 front matter 渲染时剥离；
+  - **跨周期重武装**：`update` 对上一轮 done 的 `*-update` 任务按最新变更集重新生成规格并重置为 pending——修复跨 finalize 周期后第二轮 update 空转的问题。
+- 聚合导出填充 `source_files`：`_index.yaml` / `_module.yaml` 按模块 scope 收集命中卡片的源文件并集（原先恒为空数组）。
+
+### 修复
+
+- 移除 `knowledge.py` 中不可达的死代码。
+
+## 0.3.3 — 2026-09-07
+
+### 修复
+
+- **站点抽屉菜单按钮**：桌面端侧栏常驻，顶栏 `#menu-btn` 是死控件；现在仅在窄屏
+  （≤900px）显示。
+
+### 文档
+
+- README 双语首页的 ASCII 架构图替换为绘制的架构图：中文版配中文图、英文版配英文图；
+  新增交互版架构图与规格（`docs/repowiki-architecture*.html`/`.json`，支持明暗主题、
+  路径高亮、节点搜索）。
+- 自我描述不再刻意强调「不含 LLM」：README 首句与特性列表改为「确定性构建」表述，
+  包 description、CLI `--help`、模块 docstring 同步。
+
 ## 0.3.2 — 2026-09-05
 
 ### 新增
