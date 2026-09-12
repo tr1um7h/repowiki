@@ -69,6 +69,56 @@ class TestPageRules:
         # README.md is 3 lines in the fixture; the out-of-range 9999 gets clamped
         assert "README.md:1-3" in res.text
 
+    def test_start_beyond_eof_fails(self, repo):
+        # start past EOF is a hallucinated anchor: error, not a silent clamp
+        text = valid_page().replace(
+            "[README.md:1-2](file://README.md#L1-L2)", "[README.md:50-60](file://README.md#L50-L60)", 1
+        )
+        res = check_page(text, "项目概述", repo)
+        assert not res.ok and any("起点越界" in e for e in res.errors)
+
+    def test_inverted_range_fails(self, repo):
+        text = valid_page().replace(
+            "[src/demo/main.py:1-7](file://src/demo/main.py#L1-L7)",
+            "[src/demo/main.py:7-1](file://src/demo/main.py#L7-L1)", 1
+        )
+        res = check_page(text, "项目概述", repo)
+        assert not res.ok and any("倒置" in e for e in res.errors)
+
+    def test_blank_cited_slice_fails(self, repo):
+        # line 2 of the fixture README.md is blank: nothing to anchor a claim to
+        text = valid_page().replace(
+            "[README.md:1-2](file://README.md#L1-L2)", "[README.md:2-2](file://README.md#L2-L2)", 1
+        )
+        res = check_page(text, "项目概述", repo)
+        assert not res.ok and any("空行" in e for e in res.errors)
+
+    def test_mermaid_unknown_filename_warns(self, repo):
+        text = valid_page().replace('A["api.py"] --> B["models.py"]', 'A["engine.py"] --> B["models.py"]', 1)
+        known = {"src/demo/api.py", "src/demo/models.py", "src/demo/main.py"}
+        res = check_page(text, "项目概述", repo, known_paths=known)
+        assert res.ok and any("engine.py" in w for w in res.warnings)
+
+    def test_mermaid_known_filenames_no_warning(self, repo):
+        # label shorthand ("api.py") matches by basename against the inventory
+        known = {"src/demo/api.py", "src/demo/models.py", "src/demo/main.py"}
+        res = check_page(valid_page(), "项目概述", repo, known_paths=known)
+        assert res.ok and not any("不存在" in w for w in res.warnings)
+
+    def test_section_without_sources_fails(self, repo):
+        text = valid_page().replace("- 启动失败：检查依赖\n\n章节来源", "- 启动失败：检查依赖", 1)
+        res = check_page(text, "项目概述", repo)
+        assert not res.ok and any("章节来源" in e for e in res.errors)
+
+    def test_empty_section_fails(self, repo):
+        text = valid_page().replace(
+            "## 性能与一致性考量\n- 单进程内存列表，无并发保障\n\n章节来源"
+            "\n- [src/demo/api.py:1-8](file://src/demo/api.py#L1-L8)",
+            "## 性能与一致性考量", 1,
+        )
+        res = check_page(text, "项目概述", repo)
+        assert not res.ok and any("内容为空" in e for e in res.errors)
+
     def test_backslash_path_normalized(self, repo):
         text = valid_page().replace("file://src/demo/main.py", "file://src\\demo\\main.py")
         res = check_page(text, "项目概述", repo)
@@ -251,3 +301,37 @@ class TestOverview:
         text = "# 总览\n\n## 章节导航\nx\n\n## 如何使用本 Wiki\ny\n"
         res = check_overview(text, "demo")
         assert res.ok and "# demo Wiki 总览" in res.text
+
+
+class TestPageArchetype:
+    def test_flow_page_passes_with_flow_archetype(self, repo):
+        from conftest import flow_page
+
+        res = check_page(flow_page(), "请求生命周期", repo, archetype="flow")
+        assert res.ok, res.errors
+
+    def test_flow_page_fails_under_module_rules(self, repo):
+        from conftest import flow_page
+
+        res = check_page(flow_page(), "请求生命周期", repo)  # default: module
+        assert not res.ok
+        assert any("项目结构" in e for e in res.errors)
+
+    def test_module_page_fails_under_flow_rules(self, repo):
+        res = check_page(valid_page(), "项目概述", repo, archetype="flow")
+        assert not res.ok
+        assert any("流程总览" in e for e in res.errors)
+
+    def test_flow_page_missing_section_fails(self, repo):
+        from conftest import flow_page
+
+        text = flow_page().replace("## 数据与状态变化\n", "", 1)
+        res = check_page(text, "请求生命周期", repo, archetype="flow")
+        assert not res.ok and any("数据与状态变化" in e for e in res.errors)
+
+    def test_en_flow_page_passes(self, repo):
+        from conftest import flow_page
+
+        res = check_page(flow_page("Request Lifecycle", locale="en"),
+                         "Request Lifecycle", repo, locale="en", archetype="flow")
+        assert res.ok, res.errors

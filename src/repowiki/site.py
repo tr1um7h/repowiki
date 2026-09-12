@@ -6,11 +6,12 @@ Knowledge module docs and cards (``knowledge/<locale>/``) are included as
 regular pages under a dedicated nav chapter.
 The result (``<locale>/wiki.html``) opens in any browser with zero network
 and zero server — double-click, or share the single file.
-
 Rendering is progressive: while tasks are still in flight (e.g. module-scoped
 generation), a draft metadata is written and only finished pages render;
 once every task is done, ``site`` runs the real finalize and renders the
 full-resolution wiki — same command, one shot, no extra steps.
+The same page collection is also exported as ``llms.txt`` /
+``llms-full.txt`` (llmstxt.org convention) for direct agent consumption.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from . import templates
 from .catalog import FlatNode, flatten
 from .errors import UsageError
 from .i18n import strings
+from .llms import write_llms
 from .output import emit
 from .paths import WikiPaths, sanitize_component
 from .state import TaskStore, now_iso
@@ -145,6 +147,7 @@ def run_site(paths: WikiPaths, open_browser: bool, as_json: bool) -> int:
     tmp = out.with_name(f".{out.name}.{os.getpid()}.tmp")
     tmp.write_text(html, encoding="utf-8")
     os.replace(tmp, out)
+    write_llms(paths, payload["repo"], pages, nav)
     if open_browser:
         webbrowser.open(out.as_uri())
 
@@ -157,6 +160,8 @@ def run_site(paths: WikiPaths, open_browser: bool, as_json: bool) -> int:
         "knowledge_pages": len(knowledge_pages),
         "snippets": len(snippets),
         "size_mb": round(out.stat().st_size / 1024 / 1024, 2),
+        "llms": str(paths.llms_file),
+        "llms_full": str(paths.llms_full_file),
     }
     emit(summary, _site_human, as_json)
     return 0
@@ -174,6 +179,7 @@ def _site_human(r: dict) -> str:
         )
     elif r.get("finalized"):
         lines.append("  已自动 finalize：检测到全部任务完成，全量 metadata 已生成，完整站点一次渲染")
+    lines.append(f"  agent 索引：{r['llms']} 与 {r['llms_full']}")
     lines.append("  单文件离线可用：浏览器直接打开即可（--open 自动打开）")
     return "\n".join(lines)
 

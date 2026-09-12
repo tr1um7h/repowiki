@@ -16,11 +16,19 @@ from .scanner import scan
 from .state import TaskStore
 
 
-def _git_diff(repo, since: str) -> list[str] | None:
-    out = run_git(repo, "diff", "--name-only", f"{since}..HEAD", timeout=60)
+def _git_diff(repo, since: str, dirty: bool = False) -> list[str] | None:
+    """Changed files since ``since`` — committed only by default; with
+    ``dirty`` also uncommitted (staged + unstaged) and untracked files."""
+    spec = since if dirty else f"{since}..HEAD"
+    out = run_git(repo, "diff", "--name-only", spec, timeout=60)
     if out is None:
         return None
-    return [l.strip() for l in out.splitlines() if l.strip()]
+    changed = {l.strip() for l in out.splitlines() if l.strip()}
+    if dirty:
+        others = run_git(repo, "ls-files", "--others", "--exclude-standard", timeout=60)
+        if others:
+            changed |= {l.strip() for l in others.splitlines() if l.strip()}
+    return sorted(changed)
 
 
 def _last_commit_id(paths: WikiPaths) -> str | None:
@@ -88,7 +96,7 @@ def _map_knowledge(plan: dict, existing: dict, changed_set: set[str]) -> tuple[l
     return cards, modules, skipped
 
 
-def run_update(paths: WikiPaths, since: str | None, as_json: bool) -> int:
+def run_update(paths: WikiPaths, since: str | None, as_json: bool, dirty: bool = False) -> int:
     if not (paths.repo_root / ".git").exists():
         raise UsageError("增量更新需要 git 仓库（未发现 .git）")
     since = since or _last_commit_id(paths)
@@ -97,12 +105,12 @@ def run_update(paths: WikiPaths, since: str | None, as_json: bool) -> int:
     if not paths.catalog_file.exists():
         raise UsageError("state/catalog.json 不存在，请先完成首次生成")
 
-    changed = _git_diff(paths.repo_root, since)
+    changed = _git_diff(paths.repo_root, since, dirty=dirty)
     if changed is None:
         raise UsageError(f"git diff {since}..HEAD 失败（起点 commit 是否存在？）")
     changed_set = set(changed)
     if not changed_set:
-        emit({"ok": True, "changed": 0, "created_tasks": []},
+        emit({"ok": True, "dirty": dirty, "changed": 0, "created_tasks": []},
              lambda r: "自上次生成以来无变更", as_json)
         return 0
 
@@ -145,6 +153,15 @@ def run_update(paths: WikiPaths, since: str | None, as_json: bool) -> int:
             f"{n.id}-update",
             lambda n=n: task_builders.build_update_task(
                 paths, n, sorted(changed_set & set(n.dependent_files)), inv),
+        )
+
+    # overview 描述仓库整体——只要命中了任何页面就一并刷新
+    if affected:
+        queue_or_rearm(
+            "overview-update",
+            lambda: task_builders.build_overview_update_task(
+                paths, catalog.get("repo_name") or paths.repo_root.name, nodes,
+                sorted(changed_set), inv),
         )
 
     # knowledge cards / modules: map changed files against the knowledge plan
@@ -194,12 +211,14 @@ def run_update(paths: WikiPaths, since: str | None, as_json: bool) -> int:
     result = {
         "ok": True,
         "since": since,
+        "dirty": dirty,
         "changed_files": len(changed_set),
         "affected_pages": [n.id for n in affected],
         "affected_cards": [c.get("id", "") for c in affected_cards],
         "affected_modules": [m.get("id", "") for m in affected_modules],
         "created_tasks": added,
         "rearmed_tasks": rearmed,
+        "overview_queued": bool(affected),
         "warnings": warnings,
     }
     emit(result, _update_human(affected, affected_cards, affected_modules), as_json)
@@ -209,7 +228,8 @@ def run_update(paths: WikiPaths, since: str | None, as_json: bool) -> int:
 def _update_human(affected: list, affected_cards: list, affected_modules: list) -> Callable[[dict], str]:
     # 页面标题只活在 FlatNode 里，不进 JSON 契约——以闭包带入
     def human(r: dict) -> str:
-        lines = [f"自 {r['since'][:12]} 以来变更 {r['changed_files']} 个文件，命中 {len(affected)} 个页面"]
+        scope = "（含未提交/未跟踪变更）" if r.get("dirty") else ""
+        lines = [f"自 {r['since'][:12]} 以来变更 {r['changed_files']} 个文件{scope}，命中 {len(affected)} 个页面"]
         lines += [f"  → {n.id} {n.title}" for n in affected]
         if affected_cards:
             lines.append(f"命中 {len(affected_cards)} 张知识卡片")
@@ -218,9 +238,85 @@ def _update_human(affected: list, affected_cards: list, affected_modules: list) 
             lines.append(f"命中 {len(affected_modules)} 个知识模块")
             lines += [f"  → 模块 {m.get('id')} {m.get('title', '')}" for m in affected_modules]
         lines += [f"  ⚠ {w}" for w in r["warnings"]]
+        if r.get("overview_queued"):
+            lines.append("总览页已纳入本轮刷新（overview-update 任务：变更同步到定位概述与章节导航）")
         if r.get("rearmed_tasks"):
             lines.append(f"已重新武装 {len(r['rearmed_tasks'])} 个上一轮的更新任务（规格按最新变更重写）")
         if r["created_tasks"]:
             lines.append(f"已创建 {len(r['created_tasks'])} 个增量更新任务，执行 `repowiki next <repo> --claim` 领取")
+        return "\n".join(lines)
+    return human
+
+
+def run_stale(paths: WikiPaths, since: str | None, fail_if_stale: bool, as_json: bool,
+              dirty: bool = False) -> int:
+    """Read-only staleness report: what would ``update`` turn into tasks?
+
+    Same diff → affected mapping as ``update`` (catalog ``dependent_files``
+    incl. ancestor chains + knowledge plan linkage), but nothing is written —
+    no tasks, no state mutation. Built for CI gates: ``--fail-if-stale``
+    exits 1 when any page/card/module is affected.
+    """
+    if not (paths.repo_root / ".git").exists():
+        raise UsageError("stale 检查需要 git 仓库（未发现 .git）")
+    since = since or _last_commit_id(paths)
+    if not since:
+        raise UsageError("无法确定对比起点：metadata 中无 last_commit_id，请用 --since <ref> 指定")
+    if not paths.catalog_file.exists():
+        raise UsageError("state/catalog.json 不存在，请先完成首次生成")
+
+    changed = _git_diff(paths.repo_root, since, dirty=dirty)
+    if changed is None:
+        raise UsageError(f"git diff {since}..HEAD 失败（起点 ref 是否存在？）")
+    changed_set = set(changed)
+
+    affected: list = []
+    affected_cards: list = []
+    affected_modules: list = []
+    if changed_set:
+        try:
+            catalog = json.loads(paths.catalog_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            raise UsageError(
+                f"state/catalog.json 损坏（{e}）：可手工修复该文件，或 `repowiki plan --replan` 重新规划"
+            ) from e
+        nodes = flatten(catalog, paths.locale)
+        affected = map_affected(nodes, changed_set)
+        knowledge_plan = _load_knowledge_plan(paths)
+        if isinstance(knowledge_plan, dict):
+            existing = TaskStore(paths).load()["tasks"]
+            cards, modules, _ = _map_knowledge(knowledge_plan, existing, changed_set)
+            affected_cards = [card for card, _orig, _hits in cards]
+            affected_modules = [mod for mod, _orig, _hits in modules]
+
+    result = {
+        "ok": True,
+        "since": since,
+        "dirty": dirty,
+        "changed_files": len(changed_set),
+        "affected_pages": [n.id for n in affected],
+        "affected_cards": [c.get("id", "") for c in affected_cards],
+        "affected_modules": [m.get("id", "") for m in affected_modules],
+        "stale": bool(affected or affected_cards or affected_modules),
+    }
+    emit(result, _stale_human(affected, affected_cards, affected_modules), as_json)
+    if result["stale"] and fail_if_stale:
+        return 1
+    return 0
+
+
+def _stale_human(affected: list, affected_cards: list, affected_modules: list) -> Callable[[dict], str]:
+    def human(r: dict) -> str:
+        scope = "（含未提交/未跟踪变更）" if r.get("dirty") else ""
+        if not r["stale"]:
+            return f"自 {r['since'][:12]} 以来无受影响页面{scope}，wiki 与代码同步"
+        lines = [
+            f"自 {r['since'][:12]} 以来变更 {r['changed_files']} 个文件{scope}，wiki 已过期："
+            f"{len(affected)} 个页面 / {len(affected_cards)} 张卡片 / {len(affected_modules)} 个模块"
+        ]
+        lines += [f"  → {n.id} {n.title}" for n in affected]
+        lines += [f"  → 卡片 {c.get('id')} {c.get('title', '')}" for c in affected_cards]
+        lines += [f"  → 模块 {m.get('id')} {m.get('title', '')}" for m in affected_modules]
+        lines.append("（只读检查：未创建任何任务；执行 `repowiki update <repo>` 生成增量更新任务）")
         return "\n".join(lines)
     return human

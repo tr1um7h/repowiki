@@ -37,7 +37,7 @@ repowiki next <repo> --claim --json   # 2. claim one task (read the returned ins
 repowiki check <repo> --task <id>     # 4. validate; on failure fix per errors and re-check
 #    5. back to step 2, until next returns empty with busy=0
 repowiki finalize <repo>      # 6. first run creates the overview task → execute it → finalize again to produce metadata.json
-repowiki site <repo>          # 7. build the single-file offline site .repowiki/<locale>/wiki.html (--open opens the browser)
+repowiki site <repo>          # 7. build the single-file offline site .repowiki/<locale>/wiki.html (--open opens the browser); also exports llms.txt / llms-full.txt for agent/IDE consumption by index
 #    (finalize auto-cleans state/claims and state/tasks on success; catalog/index are kept for update)
 #    if you don't need incremental updates, `repowiki clean <repo>` deletes all task state
 ```
@@ -45,10 +45,16 @@ repowiki site <repo>          # 7. build the single-file offline site .repowiki/
 After an incremental update or any post-finalize page rewrites, re-run
 `repowiki site <repo>` anytime to rebuild the site (idempotent).
 
-Task types: `catalog` (section-tree planning, produces state/catalog.json) → `page`
-(one page each) → `overview`; optional: `repowiki knowledge <repo>` (knowledge cards),
-`repowiki update <repo>` (git-diff-based incremental update; rewrites affected pages
-with an "Update Summary" section).
+Task types: `catalog` (section-tree planning, produces state/catalog.json; process- or
+mechanism-themed pages may set the optional `"archetype": "flow"` field to use the flow
+template — default `module` is structural) → `page` (one page each) → `overview`;
+optional: `repowiki knowledge <repo> [--categories <file>]` (knowledge cards; the
+category list can be replaced wholesale), `repowiki update <repo> [--dirty]`
+(git-diff-based incremental update; rewrites affected pages and the overview with an
+"Update Summary" section; `--dirty` includes uncommitted/untracked changes),
+`repowiki stale <repo> [--fail-if-stale]` (read-only staleness report: which
+pages/cards/modules would go stale; creates no tasks — built for CI gates),
+`repowiki coverage <repo>` (read-only coverage report: repo files the wiki never cites).
 The output language is decided at plan time (auto-detection weighted by the README, or
 `--locale zh|en`), persisted in `state/locale`; the spec's template matches that
 language.
@@ -151,10 +157,12 @@ first, and let the queue throttle, cool down, probe, and recover on its own:
   source code.
 - Pages follow the template and STYLE guide embedded in the spec: all required sections
   present, "Section sources" at the end of every section, "Diagram sources" after every
-  mermaid diagram, `[path:Lx-Ly](file://path#Lx-Ly)` format, line numbers within bounds,
+  mermaid diagram, `[path:Lx-Ly](file://path#Lx-Ly)` format, line numbers within bounds
+  (a start past EOF or an inverted range is rejected; only an overhanging end is clamped),
   zero cross-page links, no emoji/tables.
-- Deterministic defects caught by `check` (anchors/line numbers/H1) are auto-repaired —
-  no manual handling needed; only fix the semantic issues listed in `errors`.
+- Deterministic defects caught by `check` (anchors/H1/overhanging line-range ends) are
+  auto-repaired — no manual handling needed; only fix the semantic issues listed in
+  `errors`.
 - Output lives in `<repo>/.repowiki/` (`<locale>/content` pages, `<locale>/meta`
   metadata, `knowledge/<locale>/` knowledge cards, `<locale>/wiki.html` single-file
   viewer; locale was fixed at plan time).

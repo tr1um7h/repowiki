@@ -32,6 +32,207 @@
   fields with human-readable hints; in `--json` mode the nested `finalize` output no
   longer pollutes stdout.
 
+## 0.7.0 — 2026-09-12
+
+### Added
+
+- **Layered line-range validation**: a start past EOF and an inverted range
+  (start > end) are now errors bounced back to the agent instead of being silently
+  clamped — hallucinated line numbers no longer become format-valid but semantically
+  arbitrary citations; only an overhanging end (end > file length) keeps the
+  auto-clamp (a benign truncation).
+- **Cited-slice sanity check**: a cited line range that decodes to nothing but blank
+  lines is now an error ("cannot support any claim") — previously anchors landing on
+  blank lines or closing braces passed unnoticed.
+- **Mermaid node filename check**: file-path-like tokens inside mermaid node labels
+  are matched (by basename) against the repository inventory; misses produce a
+  warning (non-blocking, conceptual labels are fine). `check` now passes the scanned
+  inventory into `check_page` via the new `known_paths` parameter.
+- **Per-section source enforcement**: every `##` section (except the TOC and the
+  update summary) must be non-empty and contain a "Section sources / 章节来源" marker
+  (i18n-ized via a new `section_sources` key in `STRINGS`); violations are errors.
+  Sections that are empty after stripping fenced code are errors too.
+- **Coverage breakdown & effective rate**: uncited files are deterministically
+  bucketed into vendor / other-locale mirror (a locale-variant twin of an
+  already-cited file) / actionable residue; adds `effective_coverage` (denominator
+  excludes vendor and mirrors) and `uncited_breakdown` (JSON), with the human output
+  showing both rates and the grouped listing.
+
+### Changed
+
+- **Page layout**: the "Files referenced by this page" cite block moved from the top of
+  the page (after the H1) to the very end (after the Conclusion section); the incremental
+  update task's insertion anchor was adjusted accordingly (after the H1, before the TOC);
+  existing wiki pages have been migrated.
+- `validate._file_loc` now also returns the decoded lines (`utf-8` with
+  `errors="replace"`, binary `\0` detection kept) alongside the line count, feeding
+  the cited-slice sanity check.
+
+### Docs
+
+- templates (zh/en) `STYLE.md` and `page_task.md` describe the new line-range
+  semantics ("start-past-EOF / inverted ranges are rejected; only an overhanging end
+  is clamped"); `SKILL.md` / `SKILL.en.md` hard rules and the auto-fix scope were
+  synced accordingly.
+
+### Tests
+
+- 10 new validator cases: start past EOF, inverted range, blank cited slice, mermaid
+  unknown/known filenames, section without sources, empty section;
+  `test_line_range_clamped` keeps passing under the new policy (end-only clamp).
+- coverage gains breakdown/effective-rate cases (a vendor file plus an en mirror
+  whose zh twin is cited); conftest / test_i18n page fixtures gained the
+  per-section source markers required by the new rule; full suite: 202 passed.
+
+## 0.6.1 — 2026-09-09
+
+### Docs
+
+- **README restructured**: added a PyPI badge and a front-and-center live-sample link at
+  the top; the feature list was rewritten as 7 "bold keyword + one-line effect" bullets;
+  the primary install path is now PyPI `pip install repowiki-cli`; the command table is
+  trimmed to the 8 common commands; offline installation is condensed; Design Trade-offs
+  / Known Limitations / Non-Goals merged into a single "Design Boundaries" section;
+  stale hard-coded numbers removed; the "Quick Start / Usage / CI Integration" sections
+  were further removed (the five-command flow, output layout, and wiki.yml integration
+  notes moved into USAGE.md), keeping the README focused on selling points and install.
+- **New [docs/en/USAGE.md](docs/en/USAGE.md) / [docs/zh/USAGE.md](docs/zh/USAGE.md)**:
+  collects everything moved out of the README — the worker loop contract, concurrency
+  recipes (including the worker.sh script), the full 15-command reference, the
+  module/flow template section layout, reliability internals, and the complete offline
+  installation steps. No information lost.
+
+## 0.6.0 — 2026-09-09
+
+### Added
+
+- **`repowiki skill install / status`**: the skill files (`SKILL.md` / `SKILL.en.md`) now
+  ship inside the wheel, so after a pip install one command puts the skill into an agent's
+  global skills directory — `~/.agents/skills/repowiki/` by default, `--agent
+  claude|codex|zcode|cursor|opencode` for a specific client, `--target <dir>` for a custom
+  location. Installs are stamped with the version and idempotent. `repowiki skill status`
+  reports each installed copy against the package version and distinguishes not
+  installed / manual copy without stamp / outdated / up to date; both commands support
+  `--json`.
+
+### Changed
+
+- **Skill directory moved into the package**: `skills/repowiki/` →
+  `src/repowiki/skills/repowiki/` (single source of truth shared by the wheel and
+  git/plugin installs); `.claude-plugin/plugin.json`'s `skills` field now points at
+  `src/repowiki/skills`.
+
+### Docs
+
+- README (zh/en) install sections now recommend `pip install repowiki-cli` +
+  `repowiki skill install`, with manual copy demoted to a fallback; the offline-install
+  section becomes "install the CLI, then `repowiki skill install`"; skill path references
+  updated to the new location.
+
+### Tests
+
+- New `tests/test_skill_install.py` (7 cases): bundled skill resource readable (guards the
+  package-data), installs to default / `--agent` / `--target`, idempotency and stale-copy
+  update reporting, and all four `skill status` states.
+
+### Housekeeping
+
+- **Roadmap section removed**: output languages are frozen to zh/en with no further
+  languages planned; the bilingual-CLI-messages plan is cancelled (CLI messages stay as
+  they are, aimed at the driving agent).
+
+## 0.5.1 — 2026-09-08
+
+### Fixed
+
+- **Version detection adapted to the new distribution name**: after the rename to
+  `repowiki-cli`, a clean install reported `repowiki --version` as 0.0.0 (the `__init__`
+  metadata lookup still used the old name) — it now queries `repowiki-cli` first with a
+  legacy-name fallback.
+
+### Changed
+
+- **PyPI distribution name set to [`repowiki-cli`](https://pypi.org/project/repowiki-cli/)**:
+  the `repowiki` name on PyPI is taken by a same-purpose project (he-yufeng/RepoWiki).
+  This changes nothing about usage — the command is still `repowiki` and the import
+  package is still `repowiki`; after `pip install repowiki-cli` everything works as
+  documented. Offline-install wheel filenames become `repowiki_cli-*.whl`.
+
+## 0.5.0 — 2026-09-08
+
+### Added
+
+- **Page archetypes (module / flow)**: catalog page nodes gain an optional `archetype`
+  field — process/mechanism-themed pages set `"archetype": "flow"` to use the flow
+  template (Introduction / Flow Overview / Key Steps / Involved Components / Data and
+  State Changes / Troubleshooting / Conclusion, with a sequence diagram + state graph);
+  the default `module` keeps the original structural nine-section template. The validator
+  enforces required sections per archetype, and the catalog task spec steers the planner.
+- **`coverage` subcommand**: read-only coverage report — repository files never cited by
+  any wiki page/overview/knowledge card, per-page citation density and zero-citation
+  pages, all computed deterministically (the "provable quality" metric competitors
+  cannot offer).
+- **`--dirty` for `update`/`stale`**: by default only committed changes count
+  (since..HEAD); `--dirty` adds uncommitted working-tree (staged + unstaged) and
+  untracked changes — the wiki can catch up before you commit.
+- **Overview page in incremental updates**: when `update` hits any page, it also queues
+  an `overview-update` task (refreshes the positioning paragraphs and section
+  navigation; no "Update Summary" section — validation keeps the overview shape).
+- **Configurable knowledge-card categories**: `repowiki knowledge --categories <file>`
+  replaces the built-in six with a YAML/JSON list (lowercase ids, ≤12 categories),
+  persisted in `state/knowledge_categories.json` and enforced by check/update; without
+  the flag behavior is unchanged (zero migration).
+- **`llms.txt` / `llms-full.txt` export**: `repowiki site` now writes, alongside
+  `wiki.html`, a chapter-organized link index (`llms.txt`) and a concatenated full-text
+  companion (`llms-full.txt`), following the [llmstxt.org](https://llmstxt.org/)
+  convention — any agent / IDE can consume the wiki by index, no MCP required.
+- **Read-only `stale` subcommand**: `repowiki stale <repo> [--since <ref>] [--fail-if-stale]`
+  — reuses `update`'s diff→affected-pages mapping (ancestor chains + knowledge linkage)
+  to report which pages/cards/modules would go stale; creates no tasks, writes no state;
+  `--fail-if-stale` exits 1 for CI gates.
+- **Official GitHub Action (`wiki.yml`)**: on PRs, runs the stale gate automatically —
+  comments the affected pages and blocks the merge when stale (deterministic check, no
+  agent in CI); on push to main, rebuilds with `site` and publishes to GitHub Pages.
+  Wiki-as-code mode: the repo tracks `.repowiki/` content/metadata/knowledge/llms
+  indexes; `state/claims`, `state/tasks` and the rebuildable `wiki.html` are ignored.
+- **Three site-UI reworks**: stronger H1/H2 hierarchy (H1 grows to 2em/800 and keeps the
+  only full-width underline; H2 switches to accent-colored text with a 3px matching left
+  bar); chapter navigation rebuilt (the chapter title itself is now a link to the
+  chapter's index page in the accent color, all-caps dropped, and the dropdown no longer
+  repeats the identically named index entry); the on-page TOC is collapsible and docks to
+  the bottom of the sidebar when collapsed (the TOC panel's own styling is unchanged).
+- **PyPI publishing ready**: pyproject now carries complete publishing metadata
+  (readme / urls / keywords / classifiers); `pip install repowiki` becomes available
+  after the first upload.
+
+### Fixed
+
+- Site UI: H1 and H2 previously shared foreground color + full-width underlines, making
+  the visual hierarchy hard to tell apart (addressed by the three reworks above).
+
+### Housekeeping
+
+- The built-in knowledge category table moved to `DEFAULT_KNOWLEDGE_CATEGORIES`
+  (with per-category guidance, tasks.py); the plan task spec now renders the category
+  list via `{{CATEGORY_BLOCK}}` instead of hardcoding it in the template.
+
+### Tests
+
+- Tests 157 → 187: positive/negative and end-to-end coverage for the coverage report,
+  staleness gate, `--dirty`, overview incremental refresh, custom knowledge categories,
+  the flow archetype, and llms export.
+
+### Documentation
+
+- Added a competitive-analysis report
+  (`docs/{zh,en}/research/competitive-analysis.md`: DeepWiki / DeepWiki-Open / CodeWiki /
+  GitDiagram / Swimm / Repomix, with P0-P2 ranked improvements); DECISIONS gains #15
+  (research conclusions and the adopted P0 direction) and #16 (P1 implementation
+  trade-offs).
+- Both READMEs: new "CI Integration" section, `stale`/`coverage` command rows, GitHub
+  Pages live sample link, agent-consumption and page-archetype feature bullets; the
+  overview-update limitation was removed from Known Limitations (now implemented).
+
 ## 0.4.0 — 2026-09-07
 
 ### Added

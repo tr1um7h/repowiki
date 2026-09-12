@@ -33,15 +33,15 @@ repowiki next <repo> --claim --json   # 2. 领取一个任务（读返回的 ins
 repowiki check <repo> --task <id>     # 4. 校验；失败则按 errors 修复后重新 check
 #    5. 回到第 2 步，直到 next 返回空且 busy=0
 repowiki finalize <repo>      # 6. 首次会创建 overview 任务→执行→再 finalize 生成 metadata.json
-repowiki site <repo>          # 7. 生成单文件离线查看站点 .repowiki/<locale>/wiki.html（--open 自动打开浏览器）
+repowiki site <repo>          # 7. 生成单文件离线查看站点 .repowiki/<locale>/wiki.html（--open 自动打开浏览器），同时导出 llms.txt / llms-full.txt 供 agent/IDE 按索引消费
 #    （finalize 成功后自动清理 state/claims 与 state/tasks；catalog/index 保留供 update）
 #    不需要增量更新时可执行 `repowiki clean <repo>` 删除全部任务状态
 ```
 
 增量更新或 finalize 后重跑了页面，都可随时重跑 `repowiki site <repo>` 重建站点（幂等）。
 
-任务类型：`catalog`（目录树规划，产出 state/catalog.json）→ `page`（逐页撰写）→ `overview`（总览）；
-可选：`repowiki knowledge <repo>`（知识卡片）、`repowiki update <repo>`（基于 git diff 的增量更新，重写受影响页并附「更新摘要/Update Summary」小节）。
+任务类型：`catalog`（目录树规划，产出 state/catalog.json；流程/机制主题页可设可选字段 `"archetype": "flow"` 选用流程型模板，默认 module 结构型）→ `page`（逐页撰写）→ `overview`（总览）；
+可选：`repowiki knowledge <repo> [--categories <file>]`（知识卡片，类别清单可整表自定义）、`repowiki update <repo> [--dirty]`（基于 git diff 的增量更新，重写受影响页与总览页并附「更新摘要/Update Summary」小节；`--dirty` 纳入未提交/未跟踪变更）、`repowiki stale <repo> [--fail-if-stale]`（只读过期报告：哪些页面/卡片/模块会过期，不创建任务——CI 门禁用）、`repowiki coverage <repo>`（只读覆盖率报告：wiki 从未引用的仓库文件）。
 产出语言由 plan 时确定（README 权重最高的自动检测，或 `--locale zh|en`），持久化于 `state/locale`，规格中的模板即对应语言。
 
 ## 并发流程（推荐，subagent 加速）
@@ -122,6 +122,6 @@ subagent 死于限流症状时**不要立即补派**——先上报，让队列�
 ## 硬性规则
 
 - **只写任务规格指定的 output 文件**，绝不改动仓库源码。
-- 页面遵循规格内嵌的模板与 STYLE 规范：必备小节齐全、每节末尾「Section sources/章节来源」、每个 mermaid 图后「Diagram sources/图表来源」、`[path:Lx-Ly](file://path#Lx-Ly)` 格式、行号不越界、页间零链接、不用 emoji/表格。
-- `check` 的确定性缺陷（锚点/行号/H1）会被自动修复，无需手动处理；只需修复 `errors` 列出的语义问题。
+- 页面遵循规格内嵌的模板与 STYLE 规范：必备小节齐全、每节末尾「Section sources/章节来源」、每个 mermaid 图后「Diagram sources/图表来源」、`[path:Lx-Ly](file://path#Lx-Ly)` 格式、行号不越界（起点越界/区间倒置会被打回，仅终点越界自动钳制）、页间零链接、不用 emoji/表格。
+- `check` 的确定性缺陷（锚点/H1/越界的行区间终点）会被自动修复，无需手动处理；只需修复 `errors` 列出的语义问题。
 - 输出位于 `<repo>/.repowiki/`（`<locale>/content` 页面、`<locale>/meta` 元数据、`knowledge/<locale>/` 知识卡片、`<locale>/wiki.html` 单文件查看站点；locale 已在 plan 时确定）。

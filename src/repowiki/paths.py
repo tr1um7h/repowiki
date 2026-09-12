@@ -129,6 +129,10 @@ class WikiPaths:
         return self.state_dir / "knowledge.json"
 
     @property
+    def knowledge_categories_file(self) -> Path:
+        return self.state_dir / "knowledge_categories.json"
+
+    @property
     def index_file(self) -> Path:
         return self.state_dir / "index.json"
 
@@ -155,6 +159,14 @@ class WikiPaths:
     @property
     def site_file(self) -> Path:
         return self.root / self.locale / "wiki.html"
+
+    @property
+    def llms_file(self) -> Path:
+        return self.root / self.locale / "llms.txt"
+
+    @property
+    def llms_full_file(self) -> Path:
+        return self.root / self.locale / "llms-full.txt"
 
     @property
     def overview_file(self) -> Path:
