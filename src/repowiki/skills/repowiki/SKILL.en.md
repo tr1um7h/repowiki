@@ -77,20 +77,28 @@ safely in parallel:
 loop:
   1. run `repowiki next <repo> --claim --json --worker <name>`
   2. if tasks is empty and busy>0 → wait 30 seconds and retry (other workers are writing)
-     if tasks is empty and busy=0 → done
-  3. execute per tasks[0].instructions (write only the output file the instructions specify).
+     if tasks is empty and busy=0 → done (print final completion log)
+  3. Parse the returned progress field and print a progress log:
+     Format: [{timestamp}] Phase {phase}/{total_phases}, task {done}/{total}, phase tasks {phase_done}/{phase_total}, task: {title}
+     Example: [2026-09-13 14:32:15] Phase 2/3, task 15/60, phase tasks 15/45, task: User Authentication Module
+  4. execute per tasks[0].instructions (write only the output file the instructions specify).
      Hold only one claim at a time: each next hands out exactly one task, and you must
      not call next --claim again before the current task completes;
      immediately after claiming, `repowiki touch <repo> --task <id> --worker <name>` once,
      then touch roughly every 3 minutes while writing (a claim un-renewed past the stale
      window is automatically reclaimed and handed to someone else)
-  4. run `repowiki check <repo> --task <id> --worker <name> --json`
-     - ok=true → back to 1
+  5. run `repowiki check <repo> --task <id> --worker <name> --json`
+     - ok=true → 
+       run `repowiki status <repo> --json` to sync the latest progress, print completion log:
+       [{timestamp}] ✓ Completed {task}, progress {done}/{total}
+       then back to 1
      - "claimed by someone else" conflict (exit 2) → that claim was reclaimed and taken
        over: don't fight it, don't add --force, back to 1
      - ok=false → fix the same file per errors and re-check (up to 3 times; if it still
        fails, `repowiki release <repo> --task <id> --force` and end this task)
 ```
+
+**Important**: After each successful check, you MUST run `status` to sync the latest state and print accurate progress.
 
 Note: `check` must carry an explicit `--task` (or `--all` for crash recovery); done is
 terminal and repeated checks are read-only state-wise; the first `finalize` exits with
@@ -151,6 +159,62 @@ first, and let the queue throttle, cool down, probe, and recover on its own:
 - `REPOWIKI_MONITOR_WINDOW`: rate-limit symptom window (default 600 seconds = 10 minutes).
 - `REPOWIKI_MONITOR_COOLDOWN`: post-throttle cooldown / probe timeout (default 1800 seconds = 30 minutes).
 
+## Progress Log Requirements
+
+**Print clear progress logs while executing tasks** so users know exactly what's happening:
+
+### Log Format
+
+```
+{yyyy-mm-dd HH:MM:SS} Phase {current}/{total_phases}, task {done}/{total}, phase tasks {phase_done}/{phase_total}, task: {title}
+```
+
+### When to Print
+
+1. **After claiming a task**: print full progress (including task title)
+2. **After check succeeds**: run `status` to sync state, print completion log
+3. **Phase change**: print full progress
+4. **All done**: print final completion log
+
+### State Synchronization
+
+**Must sync state after each successful check**:
+
+```bash
+# After check succeeds
+repowiki check <repo> --task <id> --json
+# If ok=true, immediately sync state
+repowiki status <repo> --json
+# Print completion log
+# [{timestamp}] ✓ Completed {task}, progress {done}/{total}
+```
+
+### Getting Progress Data
+
+Use `repowiki next --json` or `repowiki status --json`:
+- `current_phase`: current phase number
+- `total`: total task count
+- `by_status.done`: completed task count
+
+**Example logs**:
+```
+[2026-09-13 14:32:15] Phase 2/3, task 15/60, phase tasks 15/45, task: User Authentication Module
+[2026-09-13 14:33:20] ✓ Completed User Authentication Module, progress 16/60
+[2026-09-13 14:35:42] Phase 2/3, task 17/60, phase tasks 17/45, task: Permission Management Page
+[2026-09-13 14:36:50] ✓ Completed Permission Management Page, progress 18/60
+[2026-09-13 14:38:01] Phase 3/3, task 45/60, phase tasks 0/15, task: Wiki Overview
+[2026-09-13 14:45:30] ✓ Completed Wiki Overview, progress 60/60
+[2026-09-13 14:45:31] ✓ All done, 60 tasks completed
+```
+
+### Phase Breakdown
+
+| Phase | Task Type | Description |
+|-------|-----------|-------------|
+| 1 | catalog | Section planning (1 per repo) |
+| 2 | page, knowledge | Page writing, knowledge cards (most tasks) |
+| 3 | overview | Wiki overview (1 per repo) |
+
 ## Hard rules
 
 - **Write only the output file the task spec specifies**; never modify repository
@@ -163,6 +227,7 @@ first, and let the queue throttle, cool down, probe, and recover on its own:
 - Deterministic defects caught by `check` (anchors/H1/overhanging line-range ends) are
   auto-repaired — no manual handling needed; only fix the semantic issues listed in
   `errors`.
+- **Print clear progress logs** so users always know the execution state.
 - Output lives in `<repo>/.repowiki/` (`<locale>/content` pages, `<locale>/meta`
   metadata, `knowledge/<locale>/` knowledge cards, `<locale>/wiki.html` single-file
   viewer; locale was fixed at plan time).

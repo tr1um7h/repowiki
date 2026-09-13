@@ -59,18 +59,26 @@ catalog 任务完成后所有页面任务相互独立，可安全并行：
 loop:
   1. 运行 `repowiki next <repo> --claim --json --worker <名字>`
   2. 若 tasks 为空且 busy>0 → 等待 30 秒重试（其他 worker 正在写）
-     若 tasks 为空且 busy=0 → 结束
-  3. 按 tasks[0].instructions 执行（只写 instructions 指定的 output 文件）。
+     若 tasks 为空且 busy=0 → 结束（打印最终完成日志）
+  3. 解析返回的 progress 字段，打印进度日志：
+     格式: [{时间}] 正在进行第 {phase}/{total_phases} 阶段，任务 {done}/{total}，阶段任务 {phase_done}/{phase_total}，任务名：{任务标题}
+     示例: [2026-09-13 14:32:15] 正在进行第 2/3 阶段，任务 15/60，阶段任务 15/45，任务名：用户认证模块
+  4. 按 tasks[0].instructions 执行（只写 instructions 指定的 output 文件）。
      一次只持有一个认领：每次 next 只发放一个任务，当前任务完成前不得再次 next --claim；
      认领后立即 `repowiki touch <repo> --task <id> --worker <名字>` 一次，
      撰写期间每约 3 分钟 touch 一次（认领超过 stale 窗口未续期会被自动回收转给他人）
-  4. 运行 `repowiki check <repo> --task <id> --worker <名字> --json`
-     - ok=true → 回到 1
+  5. 运行 `repowiki check <repo> --task <id> --worker <名字> --json`
+     - ok=true → 
+       运行 `repowiki status <repo> --json` 获取最新进度，打印完成日志：
+       [{时间}] ✓ 完成 {任务名}，进度 {done}/{total}
+       然后回到 1
      - 报「由他人认领」冲突（exit 2）→ 该认领已被回收并被接手：
        不争抢、不加 --force，回到 1
      - ok=false → 按 errors 修复同一文件后重新 check（最多 3 次，仍失败则
        `repowiki release <repo> --task <id> --force` 并结束本任务）
 ```
+
+**关键**：每次 check 成功后，必须运行 `status` 命令同步最新状态，打印准确的完成进度。
 
 注意：`check` 必须显式带 `--task`（或崩溃恢复用 `--all`）；done 是终态，重复 check 只读不改状态；
 `finalize` 第一次运行退出码为 3（表示已创建 overview 任务，属正常进展）。
@@ -119,9 +127,66 @@ subagent 死于限流症状时**不要立即补派**——先上报，让队列�
 - `REPOWIKI_MONITOR_WINDOW`：限流症状统计窗口（默认 600 秒 = 10 分钟）。
 - `REPOWIKI_MONITOR_COOLDOWN`：限流后的冷却/探测超时时长（默认 1800 秒 = 30 分钟）。
 
+## 进度日志规范
+
+**执行任务时必须打印明确的进度日志**，让用户清楚当前状态：
+
+### 日志格式
+
+```
+{yyyy-mm-dd HH:MM:SS} 正在进行第 {当前阶段}/{总阶段数} 阶段，任务 {已完成}/{总任务数}，阶段任务 {阶段已完成}/{阶段总数}，任务名：{任务标题}
+```
+
+### 打印时机
+
+1. **领取任务后**：打印完整进度（含任务名）
+2. **check 成功后**：运行 `status` 同步状态，打印完成日志
+3. **阶段变化时**：打印完整进度
+4. **全部完成时**：打印最终完成日志
+
+### 状态同步
+
+**每次 check 成功后必须同步状态**：
+
+```bash
+# check 成功后
+repowiki check <repo> --task <id> --json
+# 如果 ok=true，立即同步状态
+repowiki status <repo> --json
+# 打印完成日志
+# [{时间}] ✓ 完成 {任务名}，进度 {done}/{total}
+```
+
+### 获取进度数据
+
+通过 `repowiki next --json` 或 `repowiki status --json` 返回获取：
+- `current_phase`：当前阶段
+- `total`：总任务数
+- `by_status.done`：已完成任务数
+
+**示例日志**：
+```
+[2026-09-13 14:32:15] 正在进行第 2/3 阶段，任务 15/60，阶段任务 15/45，任务名：用户认证模块
+[2026-09-13 14:33:20] ✓ 完成 用户认证模块，进度 16/60
+[2026-09-13 14:35:42] 正在进行第 2/3 阶段，任务 17/60，阶段任务 17/45，任务名：权限管理页面
+[2026-09-13 14:36:50] ✓ 完成 权限管理页面，进度 18/60
+[2026-09-13 14:38:01] 正在进行第 3/3 阶段，任务 45/60，阶段任务 0/15，任务名：Wiki 总览
+[2026-09-13 14:45:30] ✓ 完成 Wiki 总览，进度 60/60
+[2026-09-13 14:45:31] ✓ 全部完成，共 60 个任务
+```
+
+### 阶段划分
+
+| 阶段 | 任务类型 | 说明 |
+|------|----------|------|
+| 1 | catalog | 目录规划（每个仓库只有 1 个） |
+| 2 | page, knowledge | 页面撰写、知识卡片（最多） |
+| 3 | overview | Wiki 总览（每个仓库只有 1 个） |
+
 ## 硬性规则
 
 - **只写任务规格指定的 output 文件**，绝不改动仓库源码。
 - 页面遵循规格内嵌的模板与 STYLE 规范：必备小节齐全、每节末尾「Section sources/章节来源」、每个 mermaid 图后「Diagram sources/图表来源」、`[path:Lx-Ly](file://path#Lx-Ly)` 格式、行号不越界（起点越界/区间倒置会被打回，仅终点越界自动钳制）、页间零链接、不用 emoji/表格。
 - `check` 的确定性缺陷（锚点/H1/越界的行区间终点）会被自动修复，无需手动处理；只需修复 `errors` 列出的语义问题。
+- **打印清晰的进度日志**，让用户随时了解执行状态。
 - 输出位于 `<repo>/.repowiki/`（`<locale>/content` 页面、`<locale>/meta` 元数据、`knowledge/<locale>/` 知识卡片、`<locale>/wiki.html` 单文件查看站点；locale 已在 plan 时确定）。

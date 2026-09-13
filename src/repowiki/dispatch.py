@@ -180,21 +180,81 @@ def run_watch(paths: WikiPaths, interval: float, timeout: float, as_json: bool) 
 
     started = _time.monotonic()
     last_line = ""
+    last_done_count = 0
+    last_phase = None
     stats = store.stats()
+
+    # 计算总阶段数
+    all_phases = {t["phase"] for t in data["tasks"].values() if "phase" in t}
+    total_phases = max(all_phases) if all_phases else 1
+
+    def _format_progress(stats: dict, tasks_data: dict) -> str:
+        """格式化进度日志行"""
+        ts = _time.strftime('%Y-%m-%d %H:%M:%S')
+        current_phase = stats.get("current_phase") or 0
+        done = stats["by_status"].get("done", 0)
+        total = stats["total"]
+        phase_info = f"{current_phase}/{total_phases}" if current_phase else f"0/{total_phases}"
+
+        # 子任务进度（按阶段统计）
+        phase_tasks = {"done": {}, "total": {}}
+        for t in tasks_data["tasks"].values():
+            phase = t.get("phase", 0)
+            phase_tasks["total"][phase] = phase_tasks["total"].get(phase, 0) + 1
+            if t["status"] == "done":
+                phase_tasks["done"][phase] = phase_tasks["done"].get(phase, 0) + 1
+
+        subtask_info = ""
+        if current_phase and current_phase in phase_tasks["total"]:
+            phase_done = phase_tasks["done"].get(current_phase, 0)
+            phase_total = phase_tasks["total"][current_phase]
+            subtask_info = f"，阶段任务 {phase_done}/{phase_total}"
+
+        # 当前任务名
+        current_task = ""
+        stale_ids = {s["id"] for s in stats["stale_claims"]}
+        in_flight = [
+            t for t in tasks_data["tasks"].values()
+            if t["status"] == "in_progress" and t["id"] not in stale_ids
+        ]
+        if in_flight:
+            current_task = f"，任务名：{in_flight[0]['title']}"
+
+        return (
+            f"[{ts}] 正在进行第 {phase_info} 阶段，任务 {done}/{total}"
+            f"{subtask_info}{current_task}"
+        )
 
     while True:
         stats = store.stats()
+        data = store.load()  # 重新加载任务数据
         done = stats["by_status"].get("done", 0)
         total = stats["total"]
+        current_phase = stats.get("current_phase")
         stale_ids = {s["id"] for s in stats["stale_claims"]}
         # stale claims are not "in flight": their worker is gone, the queue
         # will hand those tasks back out — counting them hides real stalls
         in_flight = [
-            t for t in store.load()["tasks"].values()
+            t for t in data["tasks"].values()
             if t["status"] == "in_progress" and t["id"] not in stale_ids
         ]
         ready = store.ready_tasks(limit=1)
 
+        # 阶段变化时打印进度
+        if current_phase != last_phase:
+            if not as_json and last_phase is not None:
+                print(_format_progress(stats, data), flush=True)
+            last_phase = current_phase
+            last_done_count = done
+
+        # 每完成 3 个任务时打印进度
+        tasks_completed = done - last_done_count
+        if tasks_completed >= 3:
+            if not as_json:
+                print(_format_progress(stats, data), flush=True)
+            last_done_count = done
+
+        # 状态变化时打印简要状态
         line = (
             f"[{_time.strftime('%H:%M:%S')}] {done}/{total} done"
             f" · 阶段{stats['current_phase']}"
@@ -208,6 +268,8 @@ def run_watch(paths: WikiPaths, interval: float, timeout: float, as_json: bool) 
 
         # terminal: everything done
         if total > 0 and done == total:
+            if not as_json:
+                print(_format_progress(stats, data), flush=True)
             emit({"reason": "completed", "stats": stats},
                  lambda r: f"✓ 全部 {r['stats']['total']} 个任务完成", as_json)
             return 0
@@ -218,8 +280,11 @@ def run_watch(paths: WikiPaths, interval: float, timeout: float, as_json: bool) 
         # fake a stall.
         if not in_flight and not ready:
             fresh = store.stats()
+            fresh_data = store.load()
             done = fresh["by_status"].get("done", 0)
             if total > 0 and done == total:
+                if not as_json:
+                    print(_format_progress(fresh, fresh_data), flush=True)
                 emit({"reason": "completed", "stats": fresh},
                      lambda r: f"✓ 全部 {r['stats']['total']} 个任务完成", as_json)
                 return 0
